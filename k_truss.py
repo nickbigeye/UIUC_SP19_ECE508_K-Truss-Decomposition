@@ -56,7 +56,9 @@ def k_truss(graph):
             affected[e] = True
 
         while True:
+            # the directed edge of affected undirected edges
             e_affected = list()
+
             for e in edges:
                 if e in affected and e[0] < e[1]:
                     e_affected.append(e)
@@ -70,7 +72,7 @@ def k_truss(graph):
             for e in e_affected:
                 tc, tc_set = triangle_count(neighbour, e[0], e[1])
                 # print(e, tc)
-                if tc < k-2:
+                if tc < k - 2:
                     # stage 1, mark e_forward and e_reverse as "delete"
                     e_forward = (e[0], e[1])
                     e_reverse = (e[1], e[0])
@@ -79,25 +81,26 @@ def k_truss(graph):
 
                     # stage 2, mark 4 edges as "affected"
                     w = tc_set
-                    if w:
-                        for w_item in w:
+                    for w_item in w:
+                        if (w_item, e[0]) in e_affected or (e[0], w_item) in e_affected:
+                            affected[(w_item, e[0])] = True
                             affected[(e[0], w_item)] = True
+                        if (w_item, e[1]) in e_affected or (e[1], w_item) in e_affected:
+                            affected[(w_item, e[1])] = True
                             affected[(e[1], w_item)] = True
-                            if (w_item, e[0]) in e_affected:
-                                affected[(w_item, e[0])] = True
-                            if (w_item, e[1]) in e_affected:
-                                affected[(w_item, e[1])] = True
 
-            new_edges = list()
+            new_edge = list()
+
             for e in edges:
-                if e not in deleted:
-                    new_edges.append(e)
-                else:
+                if e in deleted:
                     # if labeled deleted, mark as the connected as 0
                     graph[e[0]][e[1]] = 0
                     graph[e[1]][e[0]] = 0
+                else:
+                    new_edge.append(e)
 
-            edges = copy.deepcopy(new_edges)
+            edges = copy.deepcopy(new_edge)
+            neighbour = get_neighbour(graph)
 
         if edges:
             print(k)
@@ -116,7 +119,19 @@ def main():
         [0, 1, 1, 1, 1]
     ]
 
-    k_truss(graph)
+    graph2 = [
+        [1, 1, 1, 0, 0, 0, 0, 1, 0],
+        [1, 1, 0, 1, 1, 0, 0, 0, 0],
+        [1, 0, 1, 0, 0, 1, 1, 1, 0],
+        [0, 1, 0, 1, 1, 0, 0, 0, 1],
+        [0, 1, 0, 1, 1, 1, 0, 0, 1],
+        [0, 0, 1, 0, 1, 1, 1, 0, 0],
+        [0, 0, 1, 0, 0, 1, 1, 1, 1],
+        [1, 0, 1, 0, 0, 0, 1, 1, 0],
+        [0, 0, 0, 1, 1, 0, 1, 0, 1]
+    ]
+
+    k_truss(graph2)
 
 
 if __name__ == "__main__":
