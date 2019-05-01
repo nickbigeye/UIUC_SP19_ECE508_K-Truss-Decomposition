@@ -48,6 +48,7 @@ def k_truss(graph):
 
     while True:
 
+        # long update
         edges = get_edges(graph)
         neighbour = get_neighbour(graph)
 
@@ -97,8 +98,10 @@ def k_truss(graph):
                     graph[e[0]][e[1]] = 0
                     graph[e[1]][e[0]] = 0
                 else:
+                    # else, add edge to new edge list
                     new_edge.append(e)
 
+            # short update
             edges = copy.deepcopy(new_edge)
             neighbour = get_neighbour(graph)
 
