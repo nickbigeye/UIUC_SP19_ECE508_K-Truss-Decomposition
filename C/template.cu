@@ -26,19 +26,10 @@ pangolin::Vector<int> triangle_counts(
         if (w1 != -1 && w2 != -1 && w1 == w2) {
             W.push_back(w1);
             w1 = edgeDst[++u_start];
-            w2 = edgeSrc[++v_start];
+            w2 = edgeDst[++v_start];
         }
     }
     return W;
-}
-
-int inArr(int value, int *arr, int arrSize) {
-    for (int i = 0; i < arrSize; ++i) {
-        if (arr[i] == value) {
-            return 1;
-        }
-    }
-    return 0;
 }
 
 int k_truss(
@@ -50,11 +41,13 @@ int k_truss(
 
     int k = 3;
 
+    int currEdges = numEdges;
+
     while (true) {
         pangolin::Vector<int> affected; // a numEdges long vector containing whether the ith edge is affected
 
         // mark all e in edges as "affected"
-        for (int i = 0; i < numEdges; i++) {
+        for (int i = 0; i < currEdges; i++) {
             affected.push_back(1);
         }
 
@@ -62,10 +55,8 @@ int k_truss(
             pangolin::Vector<int> e_aff; // contains the index of affected edges
             pangolin::Vector<int> to_delete; // contains the index of to-be-deleted edges
 
-            for (int i = 0; i < numEdges; ++i) {
-                int src = edgeSrc[i];
-                int dst = edgeDst[i];
-                if (affected.data()[i] == 1 && src < dst) {
+            for (int i = 0; i < currEdges; ++i) {
+                if (affected.data()[i] == 1) {
                     e_aff.push_back(i);
                 }
             }
@@ -75,13 +66,13 @@ int k_truss(
             }
 
             //mark all e as "not affected"
-            for (int i = 0; i < numEdges; ++i){
+            for (int i = 0; i < currEdges; ++i) {
                 affected.data()[i] = -1;
             }
 
             for (int i = 0; i < e_aff.size(); ++i) {
-                int src = edgeSrc[i];
-                int dst = edgeDst[i];
+                int src = edgeSrc[e_aff.data()[i]];
+                int dst = edgeDst[e_aff.data()[i]];
                 pangolin::Vector<int> tcSet = triangle_counts(edgeSrc, edgeDst, rowPtr, src, dst);
                 int tc = tcSet.size();
                 if (tc < k - 2) {
@@ -89,34 +80,37 @@ int k_truss(
                     to_delete.push_back(e_aff.data()[i]);
 
                     // stage 2
-                    for (int j = 0; j < tcSet.size(); ++j) {
-                        int w_item = tcSet.data()[j];
-
-                        if ((inArr(w_item, e_aff_src.data(), e_aff_src.size()) == 1 &&
-                             inArr(src, e_aff_dst.data(), e_aff_dst.size()) == 1) ||
-                            (inArr(src, e_aff_src.data(), e_aff_src.size()) == 1 &&
-                             inArr(w_item, e_aff_dst.data(), e_aff_dst.size()) == 1)) {
-                            affected_src.push_back(w_item);
-                            affected_dst.push_back(src);
-                            affected_src.push_back(src);
-                            affected_dst.push_back(w_item);
-                        }
-
-                        if ((inArr(w_item, e_aff_src.data(), e_aff_src.size()) == 1 &&
-                             inArr(dst, e_aff_dst.data(), e_aff_dst.size()) == 1) ||
-                            (inArr(dst, e_aff_src.data(), e_aff_src.size()) == 1 &&
-                             inArr(w_item, e_aff_dst.data(), e_aff_dst.size()) == 1)) {
-                            affected_src.push_back(w_item);
-                            affected_dst.push_back(dst);
-                            affected_src.push_back(dst);
-                            affected_dst.push_back(w_item);
+                    for (int j = 0; j < currEdges; ++j) {
+                        if (edgeSrc[j] == src) {
+                            for (int k = 0; k < tcSet.size(); ++k) {
+                                if (edgeDst[j] == tcSet.data()[k]) {
+                                    affected[j] = 1;
+                                }
+                            }
+                        } else if (edgeDst[j] == src) {
+                            for (int k = 0; k < tcSet.size(); ++k) {
+                                if (edgeSrc[j] == tcSet.data()[k]) {
+                                    affected[j] = 1;
+                                }
+                            }
+                        } else if (edgeSrc[j] == dst) {
+                            for (int k = 0; k < tcSet.size(); ++k) {
+                                if (edgeDst[j] == tcSet.data()[k]) {
+                                    affected[j] = 1;
+                                }
+                            }
+                        } else if (edgeDst[j] == dst) {
+                            for (int k = 0; k < tcSet.size(); ++k) {
+                                if (edgeSrc[j] == tcSet.data()[k]) {
+                                    affected[j] = 1;
+                                }
+                            }
                         }
                     }
                 }
             }
-
             // short update
-            for (int i = 0; i < to_delete.size(); ++i){
+            for (int i = 0; i < to_delete.size(); ++i) {
                 edgeSrc[to_delete.data()[i]] = -1;
                 edgeDst[to_delete.data()[i]] = -1;
             }
@@ -126,36 +120,58 @@ int k_truss(
         pangolin::Vector<int> newSrc;
         pangolin::Vector<int> newDst;
         pangolin::Vector<int> newPtr;
-        for (int i = 0; i < numEdges; ++i){
-            if (edgeSrc[i] != -1){
+        for (int i = 0; i < currEdges; ++i) {
+            if (edgeSrc[i] != -1) {
                 newSrc.push_back(edgeSrc[i]);
             }
-            if (edgeDst[i] != -1){
+            if (edgeDst[i] != -1) {
                 newDst.push_back(edgeDst[i]);
             }
         }
 
         newPtr.push_back(0);
-        for (int i = 1; i < newSrc.size(); ++i){
-            if (newSrc.data()[i] != newSrc.data()[i-1]){
+        for (int i = 1; i < newSrc.size(); ++i) {
+            if (newSrc.data()[i] != newSrc.data()[i - 1]) {
                 newPtr.push_back(i);
             }
         }
         newPtr.push_back(newSrc.size());
 
-        edgeSrc = newSrc.data();
-        edgeDst = newDst.data();
-        rowPtr = newPtr.data();
-        numEdges = newSrc.size();
+        // have deep copy every thing to edgeSrc, edgeDst and rowPtr
+        edgeSrc = (int *) malloc(newSrc.size() * sizeof(int));
+        for (int i = 0; i < newSrc.size(); ++i) {
+            edgeSrc[i] = newSrc.data()[i];
+        }
+        edgeDst = (int *) malloc(newDst.size() * sizeof(int));
+        for (int i = 0; i < newDst.size(); ++i) {
+            edgeDst[i] = newDst.data()[i];
+        }
+        rowPtr = (int *) malloc(newPtr.size() * sizeof(int));
+        for (int i = 0; i < newPtr.size(); ++i) {
+            rowPtr[i] = newPtr.data()[i];
+        }
+        currEdges = newSrc.size();
 
-        if (numEdges > 0) {
+        if (currEdges > 0) {
+            printf("Order of truss is %d.\n", k);
+            printf("src nodes are:\n");
+            for (int i = 0; i < newSrc.size(); ++i) {
+                printf("%d, ", edgeSrc[i]);
+            }
+            printf("\n");
+
+            printf("dst nodes are:\n");
+            for (int i = 0; i < newDst.size(); ++i) {
+                printf("%d, ", edgeDst[i]);
+            }
+            printf("\n");
             k += 1;
         } else {
             break;
         }
     }
 
-    return k;
+    return k - 1;
 }
 
 //__global__ static void kernel_tc(uint64_t *__restrict__ triangleCounts, //!< per-edge triangle counts
@@ -218,12 +234,21 @@ uint64_t count_triangles(const pangolin::COOView <uint32_t> view, const int mode
 //        const uint32_t * rowPtr  = view.row_ptr();
 
         // test case for our own
-        int numEdges = 8;
+        printf("For the first graph:\n");
+        int numEdges = 16;
         int edgeSrc[16] = {0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 4, 4, 4};
         int edgeDst[16] = {1, 2, 0, 2, 3, 4, 0, 1, 3, 4, 1, 2, 4, 1, 2, 3};
         int rowPtr[6] = {0, 2, 6, 10, 13, 16};
+        printf("result for the first graph is: %d\n", k_truss(edgeSrc, edgeDst, rowPtr, numEdges));
 
-        return k_truss(edgeSrc, edgeDst, rowPtr, numEdges);
+        printf("For the second graph:\n");
+        int numEdges2 = 30;
+        int edgeSrc2[30] = {0, 0, 0, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 8, 8, 8};
+        int edgeDst2[30] = {1, 2, 7, 0, 3, 4, 0, 5, 6, 7, 1, 4, 8, 1, 3, 5, 8, 2, 4, 6, 2, 5, 7, 8, 0, 2, 6, 3, 4, 6};
+        int rowPtr2[10] = {0, 3, 6, 10, 13, 17, 20, 24, 27, 30};
+        printf("result for the second graph is %d\n", k_truss(edgeSrc2, edgeDst2, rowPtr2, numEdges2));
+
+        return 0;
     } else {
         return 0;
     }
