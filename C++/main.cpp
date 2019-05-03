@@ -150,7 +150,6 @@ void k_truss(list<list<unsigned int>> &l_graph) {
             affected[e] = true;
         }
 
-        int loop;
         while (true) {
             list<pair<unsigned int, unsigned int>> e_affected;
             for (auto e : edges) {
@@ -160,7 +159,7 @@ void k_truss(list<list<unsigned int>> &l_graph) {
             if (e_affected.empty()) break;
 
             // mark all e in edges as "unaffected"
-            map<pair<unsigned int, unsigned int>, bool> affected;
+            affected.clear();
 
             for (auto e_aff : e_affected) {
                 unsigned int u = e_aff.first;
@@ -169,15 +168,6 @@ void k_truss(list<list<unsigned int>> &l_graph) {
                 tuple<unsigned int, list<unsigned int>> tc_tuple = triangle_count(neighbour, u, v);
                 unsigned int tc = get<0>(tc_tuple);
                 list<unsigned int> tc_set = get<1>(tc_tuple);
-//
-                cout << "----------print k| loop: " << loop << " | k: " << k << endl;
-//                cout << "----------print tc_tuple| loop: " << loop << endl;
-//                cout << "for (" << u << ", " << v << "):\n";
-//                cout << "tc: " << tc << endl << "tc_set: ";
-//                for (auto intersect : tc_set) {
-//                    cout << intersect << ", ";
-//                }
-//                cout << endl << "---\n";
 
                 if (tc < k - 2) {
                     // stage 1, mark e_forward and e_reverse as "delete"
@@ -185,15 +175,6 @@ void k_truss(list<list<unsigned int>> &l_graph) {
                     pair<unsigned int, unsigned int> e_reverse = make_pair(v, u);
                     deleted[e_forward] = true;
                     deleted[e_reverse] = true;
-
-//                    cout << "---------print e_forward | loop: " << loop << endl;
-//                    cout << u << "--" << v << endl;
-//                    cout << "---------print e_reverse | loop: " << loop << endl;
-//                    cout << v << "--" << u << endl;
-//                    cout << "---------print deleted | loop: " << loop << endl;
-//                    for (auto E : deleted) {
-//                        cout << '(' << E.first.first << ", " << E.first.second << "): " << E.second << endl;
-//                    }
 
                     // stage 2, mark 4 edges as "affected"
                     list<unsigned int> w = tc_set;
@@ -210,14 +191,6 @@ void k_truss(list<list<unsigned int>> &l_graph) {
 
             list<pair<unsigned int, unsigned int>> new_edges;
 
-//            cout << "---------print deleted | loop: " << loop << endl;
-//            for (auto e : edges) {
-//                affected[e] = true;
-//            }
-//            for (auto E : deleted) {
-//                cout << '(' << E.first.first << ", " << E.first.second << "): " << E.second << endl;
-//            }
-
             for (auto e : edges) {
                 unsigned int u = e.first;
                 unsigned int v = e.second;
@@ -228,22 +201,9 @@ void k_truss(list<list<unsigned int>> &l_graph) {
                    *next(next(l_graph.begin(), v)->begin(), u) = 0;
                 }
             }
-//            if (loop == 0 || loop == 1 ) {
-//                cout << "----------print edges | loop: " << loop << endl;
-//                for (auto e : edges) {
-//                    cout << e.first << ' ' << e.second << endl;
-//                }
-//            }
 
             edges = new_edges; // To be tested
             neighbour = get_neighbour(l_graph);
-//            if (loop == 0 || loop == 1 ) {
-//                cout << "----------print new edges | loop: " << loop << endl;
-//                for (auto e : new_edges) {
-//                    cout << e.first << ' ' << e.second << endl;
-//                }
-//            }
-            loop++;
         }
 
         if (!edges.empty()) {
@@ -271,36 +231,17 @@ int main() {
             {0, 1, 1, 1, 1},
             {0, 1, 1, 1, 1}
     };
-//    cout << graph[2][2];
 
     list<list<unsigned int>> l_graph;
 
     for(int i = 0; i < N_node; i++) {
         list<unsigned int> row;
         for (int j = 0; j < N_node; j++) {
-//            cout << graph[i][j] << ' ';
             row.push_back(graph[i][j]);
         }
         l_graph.push_back(row);
-//        cout << endl;
     }
 
-//    for (list<list<unsigned int>>::iterator I = l_graph.begin(); I != l_graph.end(); ++I) {
-//        for (list<unsigned int>::iterator J = I->begin(); J != I->end(); ++J) {
-//            cout << *J << ' ';
-//        }
-//        cout << endl;
-//    }
-
-//    int ** p_graph;
-//    p_graph = new int *[N_node];
-//    for(int i = 0; i < N_node; i++)
-//        p_graph[i] = new int[N_node];
-
-//    int * p_graph = &graph;
-
-//    *next(next(l_graph.begin(), 0)->begin(), 1) = 0;
-//    *next(next(l_graph.begin(), 1)->begin(), 0) = 0;
     k_truss(l_graph);
 
     return 0;
