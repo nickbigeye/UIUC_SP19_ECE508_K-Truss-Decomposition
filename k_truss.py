@@ -38,6 +38,9 @@ def triangle_count(neighbour, u, v):
             ptr1 += 1
         else:
             ptr2 += 1
+
+    if res != len(res_set):
+        print("Not equal!")
     return res, res_set
 
 
@@ -133,7 +136,10 @@ def main():
         [1, 0, 1, 0, 0, 0, 1, 1, 0],
         [0, 0, 0, 1, 1, 0, 1, 0, 1]
     ]
+    print("For first graph:")
+    k_truss(graph)
 
+    print("For second graph:")
     k_truss(graph2)
 
 
