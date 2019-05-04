@@ -16,15 +16,7 @@ automatic grading and students should not need to modify it.
 
 namespace gpu_algorithms_labs_evaluation {
 
-    enum Mode {
-        LINEAR = 1, OTHER = 2
-    };
-
-    static int eval(const std::string &path, const Mode &mode) {
-
-        assert(endsWith(path, ".bel") && "graph should be a .bel file");
-
-        pangolin::logger::set_level(pangolin::logger::Level::TRACE);
+    static int eval(const std::string &path) {
 
         timer_start("Reading graph data");
         // create a reader for .bel files
@@ -35,67 +27,38 @@ namespace gpu_algorithms_labs_evaluation {
 
         timer_start("building unified memory CSR");
         // build a csr/coo matrix from the edge list
-        pangolin::COO <uint32_t> coo = pangolin::COO<uint32_t>::from_edgelist(
+        pangolin::COO <int> coo = pangolin::COO<int>::from_edgelist(
                 edgeList // remove condition that keeps src > dst
         );
         timer_stop(); // building unified memory CSR
 
-        timer_start("counting triangles");
-        uint64_t actual = count_triangles(coo.view(), mode);
+        timer_start("do k truss decomposition");
+        do_k_truss(coo.view());
         timer_stop(); // counting triangles
 
-        timer_start("comparing result");
-        pangolin::Config c;
-        c.gpus_ = {0};
-        c.type_ = "impact2019";
-        c.storage_ = "um";
-        c.kernel_ = "linear";
-
-        auto tc = pangolin::TriangleCounter::CreateTriangleCounter(c);
-        tc->read_data(path);
-        tc->setup_data();
-        uint64_t expected = tc->count();
-        timer_stop();
-
-        INFO("verifying with graph " << path);
-        REQUIRE(actual == expected);
+//        timer_start("comparing result");
+//        pangolin::Config c;
+//        c.gpus_ = {0};
+//        c.type_ = "impact2019";
+//        c.storage_ = "um";
+//        c.kernel_ = "linear";
+//
+//        auto tc = pangolin::TriangleCounter::CreateTriangleCounter(c);
+//        tc->read_data(path);
+//        tc->setup_data();
+//        uint64_t expected = tc->count();
+//        timer_stop();
+//
+//        INFO("verifying with graph " << path);
+//        REQUIRE(actual == expected);
 
         return 0;
     }
 
 
-    TEST_CASE("graph500-scale18-ef16_adj", "") {
-        SECTION("LINEAR") {
-            eval(GRAPH_PREFIX_PATH
-            "/graph500-scale18-ef16_adj.bel", LINEAR);
-        }
-        SECTION("OTHER") {
-            eval(GRAPH_PREFIX_PATH
-            "/graph500-scale18-ef16_adj.bel", OTHER);
-        }
-    }
-
-    TEST_CASE("amazon0302_adj", "") {
-        SECTION("LINEAR") {
-            eval(GRAPH_PREFIX_PATH
-            "/amazon0302_adj.bel", LINEAR);
-        }
-        SECTION("OTHER") {
-            eval(GRAPH_PREFIX_PATH
-            "/amazon0302_adj.bel", OTHER);
-        }
-    }
-
     TEST_CASE("roadNet-CA_adj", "") {
-        SECTION("LINEAR") {
-            eval(GRAPH_PREFIX_PATH
-            "/roadNet-CA_adj.bel", LINEAR);
-        }
-        SECTION("OTHER") {
-            eval(GRAPH_PREFIX_PATH
-            "/roadNet-CA_adj.bel", OTHER);
-        }
+        eval(GRAPH_PREFIX_PATH
+        "/roadNet-CA_adj.bel");
     }
-
 
 } // namespace gpu_algorithms_labs_evaluation

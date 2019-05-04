@@ -41,6 +41,18 @@ __global__ void markAll(int *affected, int currEdges, int flag) {
     }
 }
 
+__global__ void shortUpdate(int *edgeSrc, int *edgeDst, int *to_delete_data, int currEdge){
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+//    printf("Hello from short update!\n");
+    if (i < currEdge){
+        if (to_delete_data[i] == 1){
+            to_delete_data[i] = 0;
+            edgeSrc[i] = -1;
+            edgeDst[i] = -1;
+        }
+    }
+}
+
 __global__ void checkAffectedEdges(
         int * affected_data,
         int affected_data_length,
@@ -49,19 +61,20 @@ __global__ void checkAffectedEdges(
         int * to_delete_data,
         int * e_aff_data,
         int * rowPtr,
-        int k,
-        int * triangleCounts
+        int k
         ){
+//    printf("From CheckAffectedEdges!\n");
     int i = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (i < affected_data_length){
-        if (e_aff_data[i] == 1) {
+        if (e_aff_data[i] == 1 && edgeSrc[i] != -1 && edgeDst[i] != -1) {
             int src = edgeSrc[i];
             int dst = edgeDst[i];
-            int tcSet[100];
+            int tcSet[200];
             int tc = triangle_counts_set(edgeSrc, edgeDst, rowPtr, tcSet, src, dst);
-            triangleCounts[i] = tc;
+
             if (tc < k - 2) {
+//                printf("%dth edge marked as delete, with tc %d\n", i, tc);
                 to_delete_data[i] = 1;
                 for (int j = 0; j < affected_data_length; ++j) {
                     if (edgeSrc[j] == src) {
@@ -95,6 +108,41 @@ __global__ void checkAffectedEdges(
     }
 }
 
+__global__ void selectAff(int * e_aff_data, int * affected_data, int currEdges, int * length){
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < currEdges){
+        e_aff_data[i] = 0; // first set the initial value of e_aff to be zero
+        if (affected_data[i] == 1) {
+//            printf("%dth edge marked as affected!\n", i);
+            e_aff_data[i] = 1; // then update it to be 1 if it's affected
+            atomicAdd(length, 1);
+        }
+    }
+}
+
+__global__ void mark(int *edgeSrc, int *affected, int *e_aff, int *to_delete, int numEdges){
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+//    printf("From mark!");
+    if (i < numEdges){
+        if (edgeSrc[i] != -1){
+            affected[i] = 1;
+            to_delete[i] = 0;
+            e_aff[i] = 0;
+        }
+    }
+}
+
+__global__ void countEdges(int *edgeSrc, int numEdges, int *result){
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+//    printf("From countEdges!");
+    if (i < numEdges){
+        if (edgeSrc[i] != -1){
+//            printf("from countEdges: %d, ", i);
+            atomicAdd(result, 1);
+        }
+    }
+}
+
 int k_truss(
         int *edgeSrc,         //!< node ids for edge srcs
         int *edgeDst,         //!< node ids for edge dsts
@@ -105,181 +153,124 @@ int k_truss(
 
     int k = 3;
 
-    int currEdges = numEdges;
-    int currRow = numRow;
+    int * length = (int *) malloc (sizeof(int));
+    int * edgeCount = (int *) malloc (sizeof(int));
+
+    int * edgeSrcDevice;
+    int * edgeDstDevice;
+    int * rowPtrDevice;
+    int * lengthDevice;
+    int * edgeCountDevice;
+    int * affectedDevice;
+    int * to_deleteDevice;
+    int * e_affDevice;
+
+    cudaMalloc((void**) &edgeSrcDevice, numEdges * sizeof(int));
+    cudaMalloc((void**) &edgeDstDevice, numEdges * sizeof(int));
+    cudaMalloc((void**) &affectedDevice, numEdges * sizeof(int));
+    cudaMalloc((void**) &to_deleteDevice, numEdges * sizeof(int));
+    cudaMalloc((void**) &e_affDevice, numEdges * sizeof(int));
+    cudaMalloc((void**) &rowPtrDevice, numRow * sizeof(int));
+    cudaMalloc((void**) &lengthDevice, 1 * sizeof(int)); // keep track of the length of e_aff;
+    cudaMalloc((void**) &edgeCountDevice, 1 * sizeof(int)); // keep track of the length of E after long update;
+
+    cudaMemcpy(edgeSrcDevice, edgeSrc, numEdges * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(edgeDstDevice, edgeDst, numEdges * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(rowPtrDevice,  rowPtr,  numRow * sizeof(int),   cudaMemcpyHostToDevice);
+
+
+    dim3 dimBlock(512, 1, 1);
+    dim3 dimGrid(ceil(numEdges/512.0), 1, 1);
 
     while (true) {
-        pangolin::Vector<int> affected; // a numEdges long vector containing whether the ith edge is affected
-        pangolin::Vector<int> to_delete;
-        pangolin::Vector<int> e_aff;
-
-        // mark all e in edges as "affected" and un-deleted
-        for (int i = 0; i < currEdges; i++) {
-            affected.push_back(1);
-            to_delete.push_back(0);
-            e_aff.push_back(0);
-        }
+        // first mark all edge available to be affected and un-deleted
+        mark<<<dimGrid, dimBlock>>>(edgeSrcDevice, affectedDevice, e_affDevice, to_deleteDevice, numEdges);
+//        printf("Pre-processing all data!\n");
 
         while (true) {
-            pangolin::Vector<int> triangleCounts;
-            int * edgeSrcDevice;
-            int * edgeDstDevice;
-            int * rowPtrDevice;
 
-            cudaMalloc((void**) &edgeSrcDevice, currEdges * sizeof(int));
-            cudaMalloc((void**) &edgeDstDevice, currEdges * sizeof(int));
-            cudaMalloc((void**) &rowPtrDevice, currRow * sizeof(int));
+            // select e_aff out of affected
+            length[0] = 0;
+            cudaMemcpy(lengthDevice, length, sizeof(int), cudaMemcpyHostToDevice);
+            selectAff<<<dimGrid, dimBlock>>>(e_affDevice, affectedDevice, numEdges, lengthDevice);
+            cudaDeviceSynchronize();
+            cudaMemcpy(length, lengthDevice, sizeof(int), cudaMemcpyDeviceToHost);
+//            printf("select aff!\n");
 
-            cudaMemcpy(edgeSrcDevice, edgeSrc, currEdges * sizeof(int), cudaMemcpyHostToDevice);
-            cudaMemcpy(edgeDstDevice, edgeDst, currEdges * sizeof(int), cudaMemcpyHostToDevice);
-            cudaMemcpy(rowPtrDevice, rowPtr, currRow * sizeof(int), cudaMemcpyHostToDevice);
-
-            bool flag = true;
-
-            for (int i = 0; i < currEdges; ++i) {
-                e_aff.data()[i] = 0; // first set the initial value of e_aff to be zero
-                if (affected.data()[i] == 1) {
-                    e_aff.data()[i] = 1; // then update it to be 1 if it's affected
-                    flag = false;        // and set break flag to be false
-                }
-                triangleCounts.push_back(0);
-            }
-
-            if (flag) {
+            if (length[0] == 0) {
                 break;
             }
 
             // mark all e as "not affected"
-            dim3 dimBlock(256, 1, 1);
-            dim3 dimGrid(ceil(affected.size()/256.0), 1, 1);
-            markAll<<<dimGrid, dimBlock>>>(affected.data(), affected.size(), -1);
+            markAll<<<dimGrid, dimBlock>>>(affectedDevice, numEdges, -1);
             cudaDeviceSynchronize();
-//            printf("all elements marked unaffected\n");
 
-//            printf("check for src nodes:\n");
-//            for (int i = 0; i < currEdges; ++i){
-//                printf("%d, ", edgeSrc[i]);
-//            }
-//            printf("\n");
-//
-//            printf("check for dst nodes:\n");
-//            for (int i = 0; i < currEdges; ++i){
-//                printf("%d, ", edgeDst[i]);
-//            }
-//            printf("\n");
-//
-//            printf("check for e_aff data:\n");
-//            for (int i=0; i < currEdges; ++i){
-//                printf("%d, ", e_aff[i]);
-//            }
-//            printf("\n");
+//            printf("Mark all as unaffected!\n");
 
             // check all affected edges
             checkAffectedEdges<<<dimGrid, dimBlock>>>(
-                    affected.data(), affected.size(), edgeSrcDevice, edgeDstDevice,
-                    to_delete.data(), e_aff.data(),
-                    rowPtrDevice, k, triangleCounts.data());
+                    affectedDevice, numEdges, edgeSrcDevice, edgeDstDevice,
+                    to_deleteDevice, e_affDevice, rowPtrDevice, k);
             cudaDeviceSynchronize();
 
-//            // check for to delete data
-//            printf("check for edges to be deleted:\n");
-//            for (int i = 0; i < currEdges; ++i){
-//                if (to_delete.data()[i] == 1){
-//                    printf("%d, ", i);
-//                }
-//            }
-//            printf("\n");
-//
-//            // check for affected data
-//            printf("check for edges to be affected:\n");
-//            for (int i = 0; i < currEdges; ++i){
-//                if (affected.data()[i] == 1){
-//                    printf("%d, ", i);
-//                }
-//            }
-//            printf("\n");
-//
-//            // check for triangle data
-//            printf("check for triangle data:\n");
-//            for (int i = 0; i < currEdges; ++i){
-//                printf("%d, ", triangleCounts.data()[i]);
-//            }
-//            printf("\n");
+//            printf("Checked all affected edges!\n");
 
             // short update
-            for (int i = 0; i < currEdges; ++i) {
-                if (to_delete.data()[i] == 1){
-                    edgeSrc[i] = -1;
-                    edgeDst[i] = -1;
-                }
-            }
+            shortUpdate<<<dimGrid, dimBlock>>>(edgeSrcDevice, edgeDstDevice, to_deleteDevice, numEdges);
+            cudaDeviceSynchronize();
+
+//            printf("Short update done!\n");
         }
 
         // long update
-        pangolin::Vector<int> newSrc;
-        pangolin::Vector<int> newDst;
-        pangolin::Vector<int> newPtr;
-        for (int i = 0; i < currEdges; ++i) {
-            if (edgeSrc[i] != -1) {
-                newSrc.push_back(edgeSrc[i]);
-            }
-            if (edgeDst[i] != -1) {
-                newDst.push_back(edgeDst[i]);
-            }
-        }
+        edgeCount[0] = 0;
+        cudaMemcpy(edgeCountDevice, edgeCount, 1 * sizeof(int), cudaMemcpyHostToDevice);
+        countEdges<<<dimGrid, dimBlock>>>(edgeSrcDevice, numEdges, edgeCountDevice);
+        cudaDeviceSynchronize();
+//        printf("\n");
+        cudaMemcpy(edgeCount, edgeCountDevice, 1 * sizeof(int), cudaMemcpyDeviceToHost);
+        cudaMemcpy(edgeSrc, edgeSrcDevice, numEdges * sizeof(int), cudaMemcpyDeviceToHost);
+        cudaMemcpy(edgeDst, edgeDstDevice, numEdges * sizeof(int), cudaMemcpyDeviceToHost);
 
-        newPtr.push_back(0);
-        for (int i = 1; i < newSrc.size(); ++i) {
-            if (newSrc.data()[i] != newSrc.data()[i - 1]) {
-                newPtr.push_back(i);
-            }
-        }
-        newPtr.push_back(newSrc.size());
+//        printf("Long update done!\n");
 
-        // have deep copy every thing to edgeSrc, edgeDst and rowPtr
-        edgeSrc = (int *) malloc(newSrc.size() * sizeof(int));
-        for (int i = 0; i < newSrc.size(); ++i) {
-            edgeSrc[i] = newSrc.data()[i];
-        }
-        edgeDst = (int *) malloc(newDst.size() * sizeof(int));
-        for (int i = 0; i < newDst.size(); ++i) {
-            edgeDst[i] = newDst.data()[i];
-        }
-        rowPtr = (int *) malloc(newPtr.size() * sizeof(int));
-        for (int i = 0; i < newPtr.size(); ++i) {
-            rowPtr[i] = newPtr.data()[i];
-        }
-        currEdges = newSrc.size();
-        currRow = newPtr.size();
+//        printf("Src nodes:\n");
+//        for (int i = 0; i < numEdges; ++i){
+//            printf("%d, ", edgeSrc[i]);
+//        }
+//
+//        printf("\n");
+//        printf("Dst nodes:\n");
+//        for (int i = 0; i < numEdges; ++i){
+//            printf("%d, ", edgeDst[i]);
+//        }
+//        printf("\n");
 
-        if (currEdges > 0) {
-            printf("Order of truss is %d.\n", k);
-            printf("src nodes are:\n");
-            for (int i = 0; i < newSrc.size(); ++i) {
-                printf("%d, ", edgeSrc[i]);
-            }
-            printf("\n");
-
-            printf("dst nodes are:\n");
-            for (int i = 0; i < newDst.size(); ++i) {
-                printf("%d, ", edgeDst[i]);
-            }
-            printf("\n");
+        if (edgeCount[0] > 0) {
+            printf("Order of truss is %d. Remaining # of edges is %d\n", k, edgeCount[0]);
             k += 1;
-            if (k > 5){
+            if (k > 10){
                 break;
             }
         } else {
+            k -= 1;
             break;
         }
+
     }
 
-    return k - 1;
+    cudaFree(edgeSrcDevice);
+    cudaFree(edgeDstDevice);
+    cudaFree(rowPtrDevice);
+    cudaFree(lengthDevice);
+    cudaFree(edgeCountDevice);
+
+    return k;
 }
 
-int do_k_truss() {
+int do_k_truss(pangolin::COOView<int> view) {
 
-    // test case for our own
+//    // test case for our own
     printf("For the first graph:\n");
     int numEdges = 16;
     int edgeSrc[16] = {0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 4, 4, 4};
@@ -295,12 +286,14 @@ int do_k_truss() {
     int rowPtr2[10] = {0, 3, 6, 10, 13, 17, 20, 24, 27, 30};
     int numRow2 = 10;
     printf("k-truss order for the second graph is %d\n", k_truss(edgeSrc2, edgeDst2, rowPtr2, numEdges2, numRow2));
-//
-//    int numEdges3 = view.nnz();
-//    int * edgeSrc3 = const_cast<int*>(view.row_ind());
-//    int * edgeDst3 = const_cast<int*>(view.col_ind());
-//    int * rowPtr3 = const_cast<int*>(view.row_ptr());
-//
-//    printf("k-truss order for the input graph is %d\n", k_truss(edgeSrc3, edgeDst3, rowPtr3, numEdges3));
+
+    printf("For the third graph - California Road Network:\n");
+    int numEdges3 = view.nnz();
+    int * edgeSrc3 = const_cast<int*>(view.row_ind());
+    int * edgeDst3 = const_cast<int*>(view.col_ind());
+    int * rowPtr3 = const_cast<int*>(view.row_ptr());
+    int numRow3 = view.num_rows();
+    printf("number of edges: %d\nnumber of rows: %d\n", numEdges3, numRow3);
+    printf("k-truss order for the input graph is %d\n", k_truss(edgeSrc3, edgeDst3, rowPtr3, numEdges3, numRow3));
     return 0;
 }
