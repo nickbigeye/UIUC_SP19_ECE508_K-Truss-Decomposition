@@ -1,12 +1,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <stdio.h>
+#include <vector>
 
 #include "template.hu"
 
 // neighbor-set-intersection-based triangle counting kernel
 
-pangolin::Vector<int> triangle_counts(
+__device__ int triangle_counts(
         int *edgeSrc,
         int *edgeDst,
         int *rowPtr,
@@ -15,7 +16,7 @@ pangolin::Vector<int> triangle_counts(
     int v_start = rowPtr[v], v_end = rowPtr[v + 1];
     int w1 = edgeDst[u_start];
     int w2 = edgeDst[v_start];
-    pangolin::Vector<int> W;
+    int n_tcSet = 0;
     while (u_start < u_end and v_start < v_end) {
         if (w1 == -1 || w1 < w2) {
             w1 = edgeDst[++u_start];
@@ -24,12 +25,98 @@ pangolin::Vector<int> triangle_counts(
             w2 = edgeDst[++v_start];
         }
         if (w1 != -1 && w2 != -1 && w1 == w2) {
-            W.push_back(w1);
+//            tcSet.push_back(w1);
             w1 = edgeDst[++u_start];
             w2 = edgeDst[++v_start];
+            n_tcSet++;
         }
     }
-    return W;
+    return n_tcSet;
+}
+
+__device__ void get_tcSet(
+        int *edgeSrc,
+        int *edgeDst,
+        int *rowPtr,
+        int u, int v,
+        int *tcSet) {
+    int u_start = rowPtr[u], u_end = rowPtr[u + 1];
+    int v_start = rowPtr[v], v_end = rowPtr[v + 1];
+    int w1 = edgeDst[u_start];
+    int w2 = edgeDst[v_start];
+    int n_tcSet = 0;
+    while (u_start < u_end and v_start < v_end) {
+        if (w1 == -1 || w1 < w2) {
+            w1 = edgeDst[++u_start];
+        }
+        if (w2 == -1 || w1 > w2) {
+            w2 = edgeDst[++v_start];
+        }
+        if (w1 != -1 && w2 != -1 && w1 == w2) {
+//            tcSet.push_back(w1);
+            tcSet[n_tcSet] = w1;
+            w1 = edgeDst[++u_start];
+            w2 = edgeDst[++v_start];
+            n_tcSet++;
+        }
+    }
+}
+
+__global__ static void kernel_affected_mark(pangolin::Vector<int> &e_aff,
+                                            pangolin::Vector<int> &affected,
+                                            pangolin::Vector<int> &to_delete,
+                                            int *edgeSrc,
+                                            int *edgeDst,
+                                            int *rowPtr,
+                                            int k,
+                                            int currEdges) {
+    unsigned int edge_index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (edge_index < e_aff.size()) {
+        int src = edgeSrc[e_aff.data()[edge_index]];
+        int dst = edgeDst[e_aff.data()[edge_index]];
+        int n_tcSet = triangle_counts(edgeSrc, edgeDst, rowPtr, src, dst);
+        printf("------k: %d, n_tcSet: %d\n", k, n_tcSet);
+        int * tcSet = (int *)malloc(n_tcSet * sizeof(int));
+        get_tcSet(edgeSrc, edgeDst, rowPtr, src, dst, tcSet);
+        for (int i = 0; i < n_tcSet; i++) {
+            printf("%d: %d\n", i, tcSet[i]);
+        }
+        int tc = n_tcSet;
+        if (tc < k - 2) {
+            // stage 1
+            to_delete.push_back(e_aff.data()[edge_index]);
+
+            // stage 2
+            for (int j = 0; j < currEdges; ++j) {
+                if (edgeSrc[j] == src) {
+                    for (int k = 0; k < n_tcSet; ++k) {
+                        if (edgeDst[j] == tcSet[k]) {
+                            affected[j] = 1;
+                        }
+                    }
+                } else if (edgeDst[j] == src) {
+                    for (int k = 0; k < n_tcSet; ++k) {
+                        if (edgeSrc[j] == tcSet[k]) {
+                            affected[j] = 1;
+                        }
+                    }
+                } else if (edgeSrc[j] == dst) {
+                    for (int k = 0; k < n_tcSet; ++k) {
+                        if (edgeDst[j] == tcSet[k]) {
+                            affected[j] = 1;
+                        }
+                    }
+                } else if (edgeDst[j] == dst) {
+                    for (int k = 0; k < n_tcSet; ++k) {
+                        if (edgeSrc[j] == tcSet[k]) {
+                            affected[j] = 1;
+                        }
+                    }
+                }
+            }
+        }
+        free(tcSet);
+    }
 }
 
 int k_truss(
@@ -70,45 +157,49 @@ int k_truss(
                 affected.data()[i] = -1;
             }
 
-            for (int i = 0; i < e_aff.size(); ++i) {
-                int src = edgeSrc[e_aff.data()[i]];
-                int dst = edgeDst[e_aff.data()[i]];
-                pangolin::Vector<int> tcSet = triangle_counts(edgeSrc, edgeDst, rowPtr, src, dst);
-                int tc = tcSet.size();
-                if (tc < k - 2) {
-                    // stage 1
-                    to_delete.push_back(e_aff.data()[i]);
-
-                    // stage 2
-                    for (int j = 0; j < currEdges; ++j) {
-                        if (edgeSrc[j] == src) {
-                            for (int k = 0; k < tcSet.size(); ++k) {
-                                if (edgeDst[j] == tcSet.data()[k]) {
-                                    affected[j] = 1;
-                                }
-                            }
-                        } else if (edgeDst[j] == src) {
-                            for (int k = 0; k < tcSet.size(); ++k) {
-                                if (edgeSrc[j] == tcSet.data()[k]) {
-                                    affected[j] = 1;
-                                }
-                            }
-                        } else if (edgeSrc[j] == dst) {
-                            for (int k = 0; k < tcSet.size(); ++k) {
-                                if (edgeDst[j] == tcSet.data()[k]) {
-                                    affected[j] = 1;
-                                }
-                            }
-                        } else if (edgeDst[j] == dst) {
-                            for (int k = 0; k < tcSet.size(); ++k) {
-                                if (edgeSrc[j] == tcSet.data()[k]) {
-                                    affected[j] = 1;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+//            for (int i = 0; i < e_aff.size(); ++i) {
+//                int src = edgeSrc[e_aff.data()[i]];
+//                int dst = edgeDst[e_aff.data()[i]];
+//                pangolin::Vector<int> tcSet = triangle_counts(edgeSrc, edgeDst, rowPtr, src, dst);
+//                int tc = tcSet.size();
+//                if (tc < k - 2) {
+//                    // stage 1
+//                    to_delete.push_back(e_aff.data()[i]);
+//
+//                    // stage 2
+//                    for (int j = 0; j < currEdges; ++j) {
+//                        if (edgeSrc[j] == src) {
+//                            for (int k = 0; k < tcSet.size(); ++k) {
+//                                if (edgeDst[j] == tcSet.data()[k]) {
+//                                    affected[j] = 1;
+//                                }
+//                            }
+//                        } else if (edgeDst[j] == src) {
+//                            for (int k = 0; k < tcSet.size(); ++k) {
+//                                if (edgeSrc[j] == tcSet.data()[k]) {
+//                                    affected[j] = 1;
+//                                }
+//                            }
+//                        } else if (edgeSrc[j] == dst) {
+//                            for (int k = 0; k < tcSet.size(); ++k) {
+//                                if (edgeDst[j] == tcSet.data()[k]) {
+//                                    affected[j] = 1;
+//                                }
+//                            }
+//                        } else if (edgeDst[j] == dst) {
+//                            for (int k = 0; k < tcSet.size(); ++k) {
+//                                if (edgeSrc[j] == tcSet.data()[k]) {
+//                                    affected[j] = 1;
+//                                }
+//                            }
+//                        }
+//                    }
+//                }
+//            }
+            dim3 dimBlock(512);
+            dim3 dimGrid (ceil(1.0 * e_aff.size() / 512), 1, 1);
+            kernel_affected_mark<<<dimGrid, dimBlock>>>(e_aff, affected, to_delete, edgeSrc, edgeDst, rowPtr, k, currEdges);
+            cudaDeviceSynchronize();
             // short update
             for (int i = 0; i < to_delete.size(); ++i) {
                 edgeSrc[to_delete.data()[i]] = -1;
