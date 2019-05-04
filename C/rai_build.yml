@@ -13,5 +13,6 @@ commands:
     - cp -r /src . # ensure source code is in upload folder
     - /opt/cmake/bin/cmake /src -DCMAKE_PREFIX_PATH=${PANGOLIN_INSTALL_DIR} -DGRAPH_PREFIX_PATH=\"/graphs\"
     - make
-    - ./tc -c LINEAR
+#    - ./tc -c LINEAR
+    - nvprof -o do_k_truss.nvprof ./tc -c LINEAR
 
