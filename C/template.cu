@@ -6,6 +6,8 @@
 
 // neighbor-set-intersection-based triangle counting kernel
 
+#define BLOCK_SIZE 512
+
 __device__ int triangle_counts_set(
         const int *edgeSrc,
         const int *edgeDst,
@@ -42,10 +44,12 @@ __global__ void markAll(int *affected, int currEdges, int flag) {
 }
 
 __global__ void shortUpdate(int *edgeSrc, int *edgeDst, int *to_delete_data, int currEdge){
+//    __global__ void shortUpdate(int *edgeSrc, int *edgeDst, int *to_delete_data, int *edgeFlag, int currEdge){
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < currEdge){
         if (to_delete_data[i] == 1){
             to_delete_data[i] = 0;
+//            edgeFlag[i] = 0;
             edgeSrc[i] = -1;
             edgeDst[i] = -1;
         }
@@ -61,7 +65,7 @@ __global__ void checkAffectedEdges(
         int * e_aff_data,
         int * rowPtr,
         int k
-        ){
+){
     int i = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (i < affected_data_length){
@@ -135,6 +139,73 @@ __global__ void countEdges(int *edgeSrc, int numEdges, int *result){
     }
 }
 
+__global__ void flagInit(int *edgeFlag, int numEdges){
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < numEdges) edgeFlag[i] = 1;
+}
+
+__global__ void scan(int *X, int *Y, int *S, int numEdges) {
+    //@@ INSERT CODE HERE
+    __shared__ int XY[2*BLOCK_SIZE]; // block size change
+    int i = 2*blockIdx.x*blockDim.x + threadIdx.x;
+
+    if (i < numEdges) XY[threadIdx.x] = X[i];
+    if (i+blockDim.x < numEdges) XY[threadIdx.x+blockDim.x] = X[i+blockDim.x];
+    for (unsigned int stride = 1; stride <= blockDim.x; stride *= 2) {
+        __syncthreads();
+        int index = (threadIdx.x+1) * 2* stride -1;
+        if (index < 2*blockDim.x) XY[index] += XY[index - stride];
+    }
+    for (int stride = blockDim.x/2; stride > 0; stride /= 2) {
+        __syncthreads();
+        int index = (threadIdx.x+1)*stride*2 - 1;
+        if(index + stride < 2*blockDim.x) {
+            XY[index + stride] += XY[index];
+        }
+    }
+    __syncthreads();
+    if (i < numEdges) Y[i+1] = XY[threadIdx.x];
+    if (i+blockDim.x < numEdges) Y[i+blockDim.x+1] = XY[threadIdx.x+blockDim.x];
+
+    __syncthreads();
+    if (threadIdx.x == blockDim.x - 1) {
+        S[blockIdx.x] = XY[2*BLOCK_SIZE - 1];
+    }
+
+}
+
+__global__ void scan2(int *X, int *Y, int numEdges) {
+    //@@ INSERT CODE HERE
+    __shared__ int XY[2*BLOCK_SIZE]; // block size change
+    int i = 2*blockIdx.x*blockDim.x + threadIdx.x;
+
+    if (i < numEdges) XY[threadIdx.x] = X[i];
+    if (i+blockDim.x < numEdges) XY[threadIdx.x+blockDim.x] = X[i+blockDim.x];
+    for (unsigned int stride = 1; stride <= blockDim.x; stride *= 2) {
+        __syncthreads();
+        int index = (threadIdx.x+1) * 2* stride -1;
+        if (index < 2*blockDim.x) XY[index] += XY[index - stride];
+    }
+    for (int stride = blockDim.x/2; stride > 0; stride /= 2) {
+        __syncthreads();
+        int index = (threadIdx.x+1)*stride*2 - 1;
+        if(index + stride < 2*blockDim.x) {
+            XY[index + stride] += XY[index];
+        }
+    }
+    __syncthreads();
+    if (i < numEdges) Y[i+1] = XY[threadIdx.x];
+    if (i+blockDim.x < numEdges) Y[i+blockDim.x+1] = XY[threadIdx.x+blockDim.x];
+}
+
+__global__ void addScanBlockSum(int *S, int *Y, int numEdges) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < numEdges) {
+        int temp = Y[i];
+        Y[i] = S[blockIdx.x-1] + temp;
+    }
+}
+
 int k_truss(
         int *edgeSrc,         //!< node ids for edge srcs
         int *edgeDst,         //!< node ids for edge dsts
@@ -161,6 +232,8 @@ int k_truss(
     int * affectedDevice;
     int * to_deleteDevice;
     int * e_affDevice;
+//    int * edgeFlagDevice;
+//    int * edgePreSumDevice;
 
     cudaMalloc((void**) &edgeSrcDevice, numEdges * sizeof(int));
     cudaMalloc((void**) &edgeDstDevice, numEdges * sizeof(int));
@@ -168,6 +241,9 @@ int k_truss(
     cudaMalloc((void**) &to_deleteDevice, numEdges * sizeof(int));
     cudaMalloc((void**) &e_affDevice, numEdges * sizeof(int));
     cudaMalloc((void**) &rowPtrDevice, numRow * sizeof(int));
+//    cudaMalloc((void**) &edgeFlagDevice, numEdges * sizeof(int));
+//    cudaMalloc((void**) &edgePreSumDevice, numEdges * sizeof(int));
+
 //    cudaMalloc((void**) &lengthDevice, 1 * sizeof(int)); // keep track of the length of e_aff;
 //    cudaMalloc((void**) &edgeCountDevice, 1 * sizeof(int)); // keep track of the length of E after long update;
 
@@ -176,12 +252,19 @@ int k_truss(
     cudaMemcpy(rowPtrDevice,  rowPtr,  numRow * sizeof(int),   cudaMemcpyHostToDevice);
 
 
-    dim3 dimBlock(512, 1, 1);
-    dim3 dimGrid(ceil(numEdges/512.0), 1, 1);
+    dim3 dimBlock1(BLOCK_SIZE, 1, 1);
+    dim3 dimGrid1(ceil(1.0*numEdges/BLOCK_SIZE), 1, 1);
+
+//    flagInit<<<dimGrid1, dimBlock1>>>(edgeFlagDevice, numEdges);
+    cudaDeviceSynchronize();
 
     while (true) {
+        dim3 dimBlock(BLOCK_SIZE, 1, 1);
+        dim3 dimGrid(ceil(1.0*numEdges/BLOCK_SIZE), 1, 1);
+
         // first mark all edge available to be affected and un-deleted
         mark<<<dimGrid, dimBlock>>>(edgeSrcDevice, affectedDevice, e_affDevice, to_deleteDevice, numEdges);
+        cudaDeviceSynchronize();
 //        printf("Pre-processing all data!\n");
 
         while (true) {
@@ -205,12 +288,13 @@ int k_truss(
             // check all affected edges
             checkAffectedEdges<<<dimGrid, dimBlock>>>(
                     affectedDevice, numEdges, edgeSrcDevice, edgeDstDevice,
-                    to_deleteDevice, e_affDevice, rowPtrDevice, k);
+                            to_deleteDevice, e_affDevice, rowPtrDevice, k);
             cudaDeviceSynchronize();
 
 //            printf("Checked all affected edges!\n");
 
             // short update
+//            shortUpdate<<<dimGrid, dimBlock>>>(edgeSrcDevice, edgeDstDevice, to_deleteDevice, edgeFlagDevice, numEdges);
             shortUpdate<<<dimGrid, dimBlock>>>(edgeSrcDevice, edgeDstDevice, to_deleteDevice, numEdges);
             cudaDeviceSynchronize();
 
@@ -218,6 +302,23 @@ int k_truss(
         }
 
         // long update
+//        int * SDevice;
+//
+//        cudaMalloc((void**) &SDevice, ceil(numEdges/(2.0*BLOCK_SIZE)) * sizeof(int));
+////
+//        dim3 dimGrid2(ceil(numEdges/(2.0*BLOCK_SIZE)), 1, 1);
+//        scan<<<dimGrid2, dimBlock>>>(edgeFlagDevice, edgePreSumDevice, SDevice, numEdges);
+//        cudaDeviceSynchronize();
+////
+//        int numBlocks = ceil(numEdges/(2.0*BLOCK_SIZE));
+//        dim3 dimGrid3(ceil(numBlocks/(2.0*BLOCK_SIZE)), 1, 1);
+//        scan2<<<dimGrid3, dimBlock>>>(SDevice, SDevice, numBlocks);
+//        cudaDeviceSynchronize();
+////
+//        dim3 dimBlock2(BLOCK_SIZE*2, 1, 1);
+//        addScanBlockSum<<<dimGrid2, dimBlock2>>>(SDevice, edgePreSumDevice, numEdges);
+//        cudaDeviceSynchronize();
+
         edgeCount.data()[0] = 0;
         countEdges<<<dimGrid, dimBlock>>>(edgeSrcDevice, numEdges, edgeCount.data());
         cudaDeviceSynchronize();
@@ -232,11 +333,18 @@ int k_truss(
             break;
         }
 
+//        cudaFree(SDevice);
     }
 
     cudaFree(edgeSrcDevice);
     cudaFree(edgeDstDevice);
     cudaFree(rowPtrDevice);
+    cudaFree(affectedDevice);
+    cudaFree(to_deleteDevice);
+    cudaFree(e_affDevice);
+//    cudaFree(edgeFlagDevice);
+//    cudaFree(edgePreSumDevice);
+
 //    cudaFree(lengthDevice);
 //    cudaFree(edgeCountDevice);
 
@@ -246,22 +354,22 @@ int k_truss(
 int do_k_truss(pangolin::COOView<int> view) {
 
 //    // test case for our own
-    printf("For the first mini-test graph:\n");
-    int numEdges = 16;
-    int edgeSrc[16] = {0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 4, 4, 4};
-    int edgeDst[16] = {1, 2, 0, 2, 3, 4, 0, 1, 3, 4, 1, 2, 4, 1, 2, 3};
-    int rowPtr[6] = {0, 2, 6, 10, 13, 16};
-    int numRow = 6;
-    printf("k-truss order for the first graph is: %d\n", k_truss(edgeSrc, edgeDst, rowPtr, numEdges, numRow));
-
-    printf("For the second mini-test graph:\n");
-    int numEdges2 = 30;
-    int edgeSrc2[30] = {0, 0, 0, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 8, 8, 8};
-    int edgeDst2[30] = {1, 2, 7, 0, 3, 4, 0, 5, 6, 7, 1, 4, 8, 1, 3, 5, 8, 2, 4, 6, 2, 5, 7, 8, 0, 2, 6, 3, 4, 6};
-    int rowPtr2[10] = {0, 3, 6, 10, 13, 17, 20, 24, 27, 30};
-    int numRow2 = 10;
-    printf("k-truss order for the second graph is %d\n", k_truss(edgeSrc2, edgeDst2, rowPtr2, numEdges2, numRow2));
-
+//    printf("For the first mini-test graph:\n");
+//    int numEdges = 16;
+//    int edgeSrc[16] = {0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 4, 4, 4};
+//    int edgeDst[16] = {1, 2, 0, 2, 3, 4, 0, 1, 3, 4, 1, 2, 4, 1, 2, 3};
+//    int rowPtr[6] = {0, 2, 6, 10, 13, 16};
+//    int numRow = 6;
+//    printf("k-truss order for the first graph is: %d\n", k_truss(edgeSrc, edgeDst, rowPtr, numEdges, numRow));
+//
+//    printf("For the second mini-test graph:\n");
+//    int numEdges2 = 30;
+//    int edgeSrc2[30] = {0, 0, 0, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 8, 8, 8};
+//    int edgeDst2[30] = {1, 2, 7, 0, 3, 4, 0, 5, 6, 7, 1, 4, 8, 1, 3, 5, 8, 2, 4, 6, 2, 5, 7, 8, 0, 2, 6, 3, 4, 6};
+//    int rowPtr2[10] = {0, 3, 6, 10, 13, 17, 20, 24, 27, 30};
+//    int numRow2 = 10;
+//    printf("k-truss order for the second graph is %d\n", k_truss(edgeSrc2, edgeDst2, rowPtr2, numEdges2, numRow2));
+//
     printf("For the real input graph - California Road Network:\n");
     int numEdges3 = view.nnz();
     int * edgeSrc3 = const_cast<int*>(view.row_ind());
