@@ -1,0 +1,7 @@
+#pragma once
+
+#include <cstdint>
+#include <pangolin/pangolin.hpp>
+
+// do not modify this function signature
+int do_k_truss(pangolin::COOView<int> view);

@@ -49,7 +49,7 @@ __global__ void checkAffectedEdges(
         int * e_aff_data,
         int * rowPtr,
         int k
-){
+        ){
     int i = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (i < affected_data_length){
@@ -157,8 +157,8 @@ int k_truss(
             // check all affected edges
             checkAffectedEdges<<<dimGrid, dimBlock>>>(
                     affected.data(), affected.size(), edgeSrcDevice, edgeDstDevice,
-                            to_delete.data(), e_aff.data(),
-                            rowPtrDevice, k);
+                    to_delete.data(), e_aff.data(),
+                    rowPtrDevice, k);
             cudaDeviceSynchronize();
 
             // short update

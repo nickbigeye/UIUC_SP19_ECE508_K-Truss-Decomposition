@@ -1,6 +1,5 @@
 import copy
 
-
 def get_edges(graph):
     edges = list()
     for (i, arr) in enumerate(graph):
